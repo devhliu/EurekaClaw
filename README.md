@@ -48,7 +48,7 @@ $ eurekaclaw prove "Find recent papers on sparse attention + prove efficiency bo
 | 💡 | **Idea Generator** | Brainstorm novel hypotheses by synthesizing patterns across thousands of papers |
 | 🔢 | **Theorem Prover** | Generate, verify, and formalize proofs via a 7-stage bottom-up pipeline |
 | 📄 | **Paper Writer** | Draft camera-ready LaTeX papers with theorem environments and citations |
-| 🖥️ | **Runs Locally** | Use Ollama, vLLM, or any OpenAI-compatible endpoint — data stays private |
+| 🖥️ | **Runs Locally** | Compatible with any API — data stays private |
 | 🧠 | **Continual Learning** | Distills proof strategies into skills after every session, improving over time |
 | 🧪 | **Experiment Runner** *(under development)* | Numerically validates theoretical bounds; flags low-confidence lemmas |
 | 🌐 | **Browser UI** | React + TypeScript interface — live agent track, proof sketch, pause/resume, skills manager |
