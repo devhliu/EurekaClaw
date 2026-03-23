@@ -474,6 +474,67 @@ install_python() {
     ui_success "Python installed: $("$PYTHON_BIN" --version 2>&1)"
 }
 
+# ── Node / npm ────────────────────────────────────────────────────────────────
+MIN_NODE_MAJOR=18
+NVM_VERSION="${EUREKACLAW_NVM_VERSION:-0.40.3}"
+
+node_version_ok() {
+    local bin="${1:-node}"
+    command -v "$bin" &>/dev/null || return 1
+    local major
+    major="$("$bin" -e 'process.stdout.write(String(process.versions.node.split(".")[0]))' 2>/dev/null || true)"
+    [[ "$major" =~ ^[0-9]+$ ]] && [[ "$major" -ge "$MIN_NODE_MAJOR" ]]
+}
+
+check_node() {
+    if node_version_ok; then
+        ui_success "Node.js found: $(node --version) / npm $(npm --version)"
+        return 0
+    fi
+    # nvm-managed node not yet on PATH — try loading nvm first
+    local nvm_sh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+    if [[ -s "$nvm_sh" ]]; then
+        # shellcheck disable=SC1090
+        \. "$nvm_sh" 2>/dev/null || true
+        if node_version_ok; then
+            ui_success "Node.js found (via nvm): $(node --version) / npm $(npm --version)"
+            return 0
+        fi
+    fi
+    ui_info "Node.js ${MIN_NODE_MAJOR}+ not found — installing"
+    return 1
+}
+
+install_node() {
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    local nvm_sh="${nvm_dir}/nvm.sh"
+
+    # Install nvm if not already present
+    if [[ ! -s "$nvm_sh" ]]; then
+        ui_info "Installing nvm ${NVM_VERSION}"
+        local tmp; tmp="$(mktempfile)"
+        download_file \
+            "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" \
+            "$tmp"
+        run_quiet_step "Installing nvm" /bin/bash "$tmp"
+    fi
+
+    # Load nvm into this shell session
+    export NVM_DIR="$nvm_dir"
+    # shellcheck disable=SC1090
+    \. "$nvm_sh" 2>/dev/null || true
+
+    run_quiet_step "Installing Node.js LTS" nvm install --lts
+    nvm use --lts >/dev/null 2>&1 || true
+
+    if ! node_version_ok; then
+        ui_error "Node.js installation failed or not on PATH"
+        echo "Install Node.js manually from https://nodejs.org and re-run the installer."
+        exit 1
+    fi
+    ui_success "Node.js installed: $(node --version) / npm $(npm --version)"
+}
+
 # ── git ───────────────────────────────────────────────────────────────────────
 check_git() {
     command -v git &>/dev/null && { ui_success "Git found: $(git --version)"; return 0; }
@@ -568,6 +629,13 @@ install_eurekaclaw_from_git() {
     ui_info "Installing EurekaClaw${EXTRAS:+ (extras: ${EXTRAS})}"
     run_quiet_step "Installing EurekaClaw" "$pip_bin" install --quiet "$install_target"
     ui_success "EurekaClaw installed into virtual environment"
+
+    # ── frontend npm install ───────────────────────────────────────────────────
+    local frontend_dir="${repo_dir}/frontend"
+    if [[ -f "${frontend_dir}/package.json" ]]; then
+        run_quiet_step "Installing frontend dependencies" npm --prefix "$frontend_dir" install
+        ui_success "Frontend dependencies installed"
+    fi
 
     # ── shim ──────────────────────────────────────────────────────────────────
     ensure_user_local_bin_on_path
@@ -694,9 +762,9 @@ main() {
     # ── [1/3] Prepare environment ─────────────────────────────────────────────
     ui_stage "Preparing environment"
 
-    install_homebrew
-    check_python || install_python
-    check_git    || install_git
+    check_python || { install_homebrew; install_python; }
+    check_git    || { install_homebrew; install_git; }
+    check_node   || install_node
 
     # ── [2/3] Install EurekaClaw ──────────────────────────────────────────────
     ui_stage "Installing EurekaClaw"

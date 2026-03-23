@@ -142,6 +142,42 @@ if ($gitCmd) {
     exit 1
 }
 
+# ── Node / npm ────────────────────────────────────────────────────────────────
+$MIN_NODE_MAJOR = 18
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+$nodeOk = $false
+if ($nodeCmd) {
+    try {
+        $nodeMajor = [int](& node -e "process.stdout.write(String(process.versions.node.split('.')[0]))" 2>$null)
+        $nodeOk = $nodeMajor -ge $MIN_NODE_MAJOR
+    } catch {}
+}
+
+if ($nodeOk) {
+    $nodeVer = & node --version
+    $npmVer  = & npm --version
+    Write-Success "Node.js found: $nodeVer / npm $npmVer"
+} else {
+    Write-Warn "Node.js $MIN_NODE_MAJOR+ not found — installing via winget"
+    Invoke-Step "Installing Node.js LTS" {
+        $result = winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent 2>&1
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {
+            # -1978335189 = APPINSTALLER_ERROR_ALREADY_INSTALLED
+            throw "winget install node failed (exit $LASTEXITCODE): $result"
+        }
+        # Refresh PATH so node/npm are visible in this session
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    }
+    $nodeCmd2 = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $nodeCmd2) {
+        Write-Err "Node.js installation succeeded but 'node' is not on PATH."
+        Write-Host "  Restart your terminal and re-run the installer, or install Node.js manually from https://nodejs.org"
+        exit 1
+    }
+    Write-Success "Node.js installed: $(& node --version) / npm $(& npm --version)"
+}
+
 # ── [2/3] Install EurekaClaw ──────────────────────────────────────────────────
 Write-Section "[2/3] Installing EurekaClaw"
 
@@ -200,6 +236,16 @@ Invoke-Step "Installing EurekaClaw" {
     if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 }
 Write-Success "EurekaClaw installed into virtual environment"
+
+# Frontend npm install
+$FrontendDir = Join-Path $GitDir "frontend"
+if (Test-Path (Join-Path $FrontendDir "package.json")) {
+    Invoke-Step "Installing frontend dependencies" {
+        & npm --prefix $FrontendDir install
+        if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+    }
+    Write-Success "Frontend dependencies installed"
+}
 
 # ── [3/3] Finalize ────────────────────────────────────────────────────────────
 Write-Section "[3/3] Finalizing"
