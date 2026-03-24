@@ -1,37 +1,91 @@
-"""OpenAI Codex OAuth credential management.
+"""OpenAI Codex credential management.
 
-Allows users with an OpenAI Codex subscription to run EurekaClaw without
-a separate API key, by using EurekaClaw's built-in OAuth login:
+Reads credentials stored by the official OpenAI Codex CLI
+(https://github.com/openai/codex) after the user runs::
 
-    eurekaclaw login --provider openai-codex   # one-time browser login
+    codex auth login      # one-time browser login via the Codex CLI
 
-Tokens are stored in ~/.eurekaclaw/credentials/openai-codex.json and
-refreshed automatically.  No external proxy is needed — OpenAI's API
-accepts Bearer tokens directly via the OpenAI-compatible adapter.
+Credentials are read from ``~/.codex/auth.json`` and optionally copied into
+``~/.eurekaclaw/credentials/openai-codex.json`` for management.
 
-Mirrors the role of ccproxy_manager.py for Anthropic OAuth.
+This mirrors the role of ccproxy_manager.py for Anthropic OAuth — EurekaClaw
+does NOT initiate its own OAuth flow; it piggybacks on the Codex CLI's login,
+exactly as it piggybacks on Claude Code's login for Anthropic OAuth.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _PROVIDER = "openai-codex"
+_CODEX_CLI_AUTH_PATH = Path.home() / ".codex" / "auth.json"
 
 
 # =============================================================================
-# Token retrieval & refresh
+# Read Codex CLI credentials
 # =============================================================================
 
 
-def _load_valid_tokens() -> dict | None:
-    """Return stored tokens for openai-codex, refreshing if expired.
+def _read_codex_cli_tokens() -> dict[str, Any] | None:
+    """Read the access token stored by the official Codex CLI.
 
-    Returns None if no credentials are stored.
-    Raises RuntimeError if refresh fails.
+    Supports the ``~/.codex/auth.json`` format::
+
+        {
+          "auth_mode": "chatgpt",
+          "tokens": {
+            "access_token": "sk-...",
+            "refresh_token": "...",
+            "id_token": "eyJ..."
+          },
+          "last_refresh": "2026-..."
+        }
+
+    Returns a flat token dict with ``access_token`` / ``refresh_token``,
+    or None if the file is absent or malformed.
+    """
+    if not _CODEX_CLI_AUTH_PATH.exists():
+        return None
+    try:
+        raw = json.loads(_CODEX_CLI_AUTH_PATH.read_text())
+    except Exception:
+        return None
+
+    tokens = raw.get("tokens", {})
+    if not tokens.get("access_token"):
+        return None
+
+    return {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "id_token": tokens.get("id_token", ""),
+        "auth_mode": raw.get("auth_mode", "chatgpt"),
+        "last_refresh": raw.get("last_refresh", ""),
+        # No expires_in in Codex CLI format — token_store.is_token_expired
+        # will return False when expires_in is absent, which is correct here
+        # since the Codex CLI refreshes tokens on its own expiry schedule.
+    }
+
+
+# =============================================================================
+# Token retrieval (EurekaClaw store → Codex CLI file)
+# =============================================================================
+
+
+def _load_valid_tokens() -> dict[str, Any] | None:
+    """Return a valid access token, trying in order:
+
+    1. EurekaClaw's own credential store (``~/.eurekaclaw/credentials/openai-codex.json``)
+       — populated by ``eurekaclaw login --provider openai-codex``
+    2. The Codex CLI's credential file (``~/.codex/auth.json``)
+
+    Returns None if no credentials are found anywhere.
     """
     from eurekaclaw.auth.token_store import (
         is_token_expired,
@@ -39,38 +93,19 @@ def _load_valid_tokens() -> dict | None:
         save_tokens,
     )
 
+    # 1 — Try EurekaClaw's own store first
     tokens = load_tokens(_PROVIDER)
-    if tokens is None:
-        return None
+    if tokens and not is_token_expired(tokens):
+        return tokens
 
-    if is_token_expired(tokens):
-        refresh_token = tokens.get("refresh_token")
-        if not refresh_token:
-            # No refresh token — credentials must be re-obtained
-            return None
+    # 2 — Fall back to the Codex CLI's credential file
+    codex_tokens = _read_codex_cli_tokens()
+    if codex_tokens:
+        # Cache into EurekaClaw's store so future runs skip the file read
+        save_tokens(_PROVIDER, codex_tokens)
+        return codex_tokens
 
-        logger.debug("Codex access token expired; refreshing…")
-        from eurekaclaw.auth.oauth import refresh_tokens
-        from eurekaclaw.auth.providers import get_provider
-
-        provider = get_provider(_PROVIDER)
-        try:
-            new_tokens = refresh_tokens(
-                token_url=provider.token_url,
-                client_id=provider.client_id,
-                refresh_token=refresh_token,
-            )
-            # Carry forward the refresh token if the new response omits it
-            new_tokens.setdefault("refresh_token", refresh_token)
-            save_tokens(_PROVIDER, new_tokens)
-            tokens = new_tokens
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to refresh OpenAI Codex token: {exc}\n"
-                "Re-authenticate with: eurekaclaw login --provider openai-codex"
-            ) from exc
-
-    return tokens
+    return None
 
 
 # =============================================================================
@@ -81,8 +116,8 @@ def _load_valid_tokens() -> dict | None:
 def setup_codex_env(access_token: str) -> None:
     """Inject the Codex access token into the environment.
 
-    ``openai.AsyncOpenAI`` reads ``OPENAI_COMPAT_API_KEY`` (and the base URL)
-    so the OpenAICompatAdapter picks it up without any code changes.
+    The OpenAICompatAdapter reads ``OPENAI_COMPAT_API_KEY`` (and the base URL),
+    so no code changes are needed in the adapter itself.
     """
     os.environ["OPENAI_COMPAT_API_KEY"] = access_token
 
@@ -96,13 +131,12 @@ def maybe_setup_codex_auth() -> None:
     """Conditionally inject Codex OAuth credentials based on EurekaClaw settings.
 
     Reads ``settings.codex_auth_mode``.  When auth mode is ``"oauth"``:
-    - Loads (and refreshes if needed) the stored token
+
+    - Loads credentials from EurekaClaw's store or ``~/.codex/auth.json``
     - Sets ``OPENAI_COMPAT_API_KEY`` in the process environment
 
-    Returns None (no subprocess to manage — OpenAI accepts Bearer tokens directly).
-
     Raises:
-        RuntimeError: If ``CODEX_AUTH_MODE=oauth`` but no credentials are stored.
+        RuntimeError: If ``CODEX_AUTH_MODE=oauth`` but no credentials are found.
     """
     from eurekaclaw.config import settings
 
@@ -113,14 +147,17 @@ def maybe_setup_codex_auth() -> None:
     if not tokens:
         raise RuntimeError(
             "CODEX_AUTH_MODE=oauth but no OpenAI Codex credentials found.\n"
-            "Log in first with: eurekaclaw login --provider openai-codex"
+            "Log in with the Codex CLI first:\n"
+            "  npm install -g @openai/codex\n"
+            "  codex auth login\n"
+            "Or run: eurekaclaw login --provider openai-codex  (if already logged in)"
         )
 
     access_token = tokens.get("access_token", "")
     if not access_token:
         raise RuntimeError(
             "Stored OpenAI Codex credentials are missing an access_token.\n"
-            "Re-authenticate with: eurekaclaw login --provider openai-codex"
+            "Re-authenticate with the Codex CLI: codex auth login"
         )
 
     setup_codex_env(access_token)

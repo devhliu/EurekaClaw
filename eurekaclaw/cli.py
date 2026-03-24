@@ -513,19 +513,24 @@ def test_paper_reader(session_id: str, paper_ref: str, mode: str, direction: str
 @click.option(
     "--provider", "-p",
     required=True,
-    help="OAuth provider to authenticate with. Currently supported: openai-codex",
+    help="OAuth provider to read credentials from. Currently supported: openai-codex",
 )
 def login(provider: str) -> None:
-    """Authenticate with an external provider via browser OAuth.
+    """Import credentials from an external provider's CLI into EurekaClaw.
 
-    Opens your browser for a one-time login. Credentials are stored in
-    ~/.eurekaclaw/credentials/ and refreshed automatically on future runs.
+    For openai-codex, reads the token that the official Codex CLI stored after
+    you ran ``codex auth login``, and copies it into EurekaClaw's credential
+    store so it is used automatically on future runs.
 
-    Example:
+    Prerequisites:
+
+        npm install -g @openai/codex
+        codex auth login        # opens browser, one-time
+
+    Then:
 
         eurekaclaw login --provider openai-codex
     """
-    from eurekaclaw.auth.oauth import run_device_flow
     from eurekaclaw.auth.providers import get_provider
     from eurekaclaw.auth.token_store import save_tokens
 
@@ -535,18 +540,35 @@ def login(provider: str) -> None:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
 
-    try:
-        tokens = run_device_flow(prov)
-    except RuntimeError as exc:
-        console.print(f"[red]Login failed: {exc}[/red]")
-        sys.exit(1)
+    if provider == "openai-codex":
+        from eurekaclaw.codex_manager import _CODEX_CLI_AUTH_PATH, _read_codex_cli_tokens
 
-    save_tokens(provider, tokens)
-    console.print(f"[green]✓ Logged in to {prov.label}. Credentials saved.[/green]")
-    console.print(
-        f"[dim]Set [bold]LLM_BACKEND=codex[/bold] and "
-        f"[bold]CODEX_AUTH_MODE=oauth[/bold] in your .env to use them.[/dim]"
-    )
+        if not _CODEX_CLI_AUTH_PATH.exists():
+            console.print(
+                f"[red]Codex CLI credentials not found at {_CODEX_CLI_AUTH_PATH}[/red]\n"
+                "[dim]Log in first with the Codex CLI:\n"
+                "  npm install -g @openai/codex\n"
+                "  codex auth login[/dim]"
+            )
+            sys.exit(1)
+
+        tokens = _read_codex_cli_tokens()
+        if not tokens or not tokens.get("access_token"):
+            console.print(
+                f"[red]Could not read a valid access_token from {_CODEX_CLI_AUTH_PATH}[/red]\n"
+                "[dim]Try re-authenticating with: codex auth login[/dim]"
+            )
+            sys.exit(1)
+
+        save_tokens(provider, tokens)
+        console.print(f"[green]✓ Codex credentials imported from {_CODEX_CLI_AUTH_PATH}[/green]")
+        console.print(
+            "[dim]Set [bold]LLM_BACKEND=codex[/bold] and "
+            "[bold]CODEX_AUTH_MODE=oauth[/bold] in your .env to use them.[/dim]"
+        )
+    else:
+        console.print(f"[red]No login handler for provider {provider!r}.[/red]")
+        sys.exit(1)
 
 
 @main.command()
