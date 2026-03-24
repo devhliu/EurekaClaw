@@ -195,6 +195,12 @@ def start_ccproxy(port: int) -> subprocess.Popen:
                 except Exception:
                     pass
             detail = f": {stderr_out}" if stderr_out else ""
+            # EADDRINUSE / 10048 means the port is occupied by a stale process.
+            if "10048" in stderr_out or "address already in use" in stderr_out.lower():
+                raise RuntimeError(
+                    f"Port {port} is already in use and not responding to health checks.\n"
+                    "Kill the process occupying that port, or change CCPROXY_PORT in .env."
+                )
             raise RuntimeError(
                 f"ccproxy exited immediately with code {proc.returncode}{detail}"
             )
@@ -272,6 +278,15 @@ def _patch_ccproxy_oauth_header() -> None:
     try:
         ccproxy_bin = _ccproxy_exe()
         if not ccproxy_bin:
+            return
+
+        # On Windows, ccproxy ships as a compiled PE binary (.exe), not a
+        # Python script.  PE files start with the "MZ" magic bytes — skip the
+        # patch entirely in that case (no Python source to edit).
+        with open(ccproxy_bin, "rb") as _f:
+            magic = _f.read(2)
+        if magic == b"MZ":
+            logger.debug("ccproxy is a compiled binary; skipping adapter patch")
             return
 
         shebang = pathlib.Path(ccproxy_bin).read_text(encoding="utf-8", errors="replace").splitlines()[0]
