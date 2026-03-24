@@ -109,11 +109,19 @@ def check_ccproxy_auth(provider: str = "claude_api") -> tuple[bool, str]:
     """
     try:
         exe = _ccproxy_exe() or "ccproxy"
+        env = os.environ.copy()
+        # Force UTF-8 I/O in the ccproxy subprocess so that rich's unicode
+        # output (✓/✗) does not crash on Windows terminals with GBK encoding.
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         result = subprocess.run(
             [exe, "auth", "status", provider],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
+            env=env,
         )
         import re as _re
 
