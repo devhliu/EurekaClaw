@@ -936,22 +936,36 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
     """Initialize the configured client and perform a minimal text-generation check."""
     backend = str(config.get("llm_backend", "anthropic"))
     auth_mode = str(config.get("anthropic_auth_mode", "api_key"))
-    model = str(
-        config.get("eurekaclaw_fast_model")
-        or config.get("openai_compat_model")
-        or config.get("eurekaclaw_model")
-        or ""
-    )
+    codex_auth = str(config.get("codex_auth_mode", "api_key"))
+
+    # Resolve model: codex uses codex_model, others use fast/compat/main
+    if backend == "codex":
+        model = str(config.get("codex_model") or "o4-mini")
+    else:
+        model = str(
+            config.get("eurekaclaw_fast_model")
+            or config.get("openai_compat_model")
+            or config.get("eurekaclaw_model")
+            or ""
+        )
 
     try:
         with _temporary_auth_env(config):
-            client = create_client(
-                backend=backend,
-                anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
-                openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
-                openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
-                openai_model=str(config.get("openai_compat_model", "") or ""),
-            )
+            # For codex OAuth, don't pass openai_api_key — it's injected into
+            # env by maybe_setup_codex_auth() inside _temporary_auth_env.
+            if backend == "codex" and codex_auth == "oauth":
+                client = create_client(
+                    backend=backend,
+                    openai_model=str(config.get("codex_model") or ""),
+                )
+            else:
+                client = create_client(
+                    backend=backend,
+                    anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
+                    openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
+                    openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
+                    openai_model=str(config.get("openai_compat_model", "") or ""),
+                )
             response = await client.messages.create(
                 model=model,
                 max_tokens=16,
@@ -1038,6 +1052,51 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
                 return
             authed, msg = check_ccproxy_auth("claude_api")
             self._send_json({"installed": True, "authenticated": authed, "message": msg})
+            return
+        if parsed.path == "/api/codex/status":
+            try:
+                from eurekaclaw.codex_manager import _read_codex_cli_tokens, _CODEX_CLI_AUTH_PATH
+                from eurekaclaw.auth.token_store import load_tokens
+
+                # Check EurekaClaw store first, then Codex CLI file
+                stored = load_tokens("openai-codex")
+                cli_tokens = _read_codex_cli_tokens()
+                has_token = bool(
+                    (stored and stored.get("access_token"))
+                    or (cli_tokens and cli_tokens.get("access_token"))
+                )
+                if has_token:
+                    self._send_json({
+                        "installed": True,
+                        "authenticated": True,
+                        "message": "Codex credentials available",
+                    })
+                elif _CODEX_CLI_AUTH_PATH.exists():
+                    self._send_json({
+                        "installed": True,
+                        "authenticated": False,
+                        "message": "Codex CLI file found but access token is missing or invalid",
+                    })
+                else:
+                    self._send_json({
+                        "installed": False,
+                        "authenticated": False,
+                        "message": f"No credentials found. Run: npm install -g @openai/codex && codex auth login",
+                    })
+            except Exception as exc:
+                self._send_json({
+                    "installed": False,
+                    "authenticated": False,
+                    "message": f"Error checking Codex status: {exc}",
+                })
+            return
+        if parsed.path == "/api/codex/package-status":
+            try:
+                import importlib.util
+                openai_spec = importlib.util.find_spec("openai")
+                self._send_json({"installed": openai_spec is not None})
+            except Exception:
+                self._send_json({"installed": False})
             return
         if parsed.path == "/api/health":
             self._send_json({"ok": True, "time": datetime.utcnow().isoformat()})
@@ -1213,6 +1272,63 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
                     stderr=_subprocess.DEVNULL,
                 )
                 self._send_json({"ok": True, "message": "OAuth login opened in your browser. Complete authorization, then click 'Save & test'."})
+            except Exception as exc:
+                self._send_json({"ok": False, "message": str(exc)})
+            return
+
+        if parsed.path == "/api/codex/install":
+            try:
+                repo_root = str(Path(__file__).resolve().parents[2])
+                # Prefer uv pip (uv-managed venvs don't bundle pip)
+                uv_exe = shutil.which("uv")
+                if uv_exe:
+                    cmd = [uv_exe, "pip", "install", "openai"]
+                else:
+                    cmd = [_sys.executable, "-m", "pip", "install", "openai"]
+                result = _subprocess.run(
+                    cmd,
+                    capture_output=True, text=True, timeout=120,
+                    cwd=repo_root,
+                )
+                if result.returncode == 0:
+                    self._send_json({"ok": True, "message": "OpenAI package installed successfully."})
+                else:
+                    self._send_json({"ok": False, "message": result.stderr.strip() or result.stdout.strip()})
+            except Exception as exc:
+                self._send_json({"ok": False, "message": str(exc)})
+            return
+
+        if parsed.path == "/api/codex/login":
+            try:
+                from eurekaclaw.codex_manager import _read_codex_cli_tokens, _CODEX_CLI_AUTH_PATH
+                from eurekaclaw.auth.token_store import save_tokens
+
+                if not _CODEX_CLI_AUTH_PATH.exists():
+                    self._send_json({
+                        "ok": False,
+                        "message": (
+                            f"Codex CLI credentials not found at {_CODEX_CLI_AUTH_PATH}. "
+                            "Install and login first:\n"
+                            "  npm install -g @openai/codex\n"
+                            "  codex auth login"
+                        ),
+                    })
+                    return
+                tokens = _read_codex_cli_tokens()
+                if not tokens or not tokens.get("access_token"):
+                    self._send_json({
+                        "ok": False,
+                        "message": (
+                            f"Could not read a valid access_token from {_CODEX_CLI_AUTH_PATH}. "
+                            "Try re-authenticating with: codex auth login"
+                        ),
+                    })
+                    return
+                save_tokens("openai-codex", tokens)
+                self._send_json({
+                    "ok": True,
+                    "message": f"Codex credentials imported from {_CODEX_CLI_AUTH_PATH}",
+                })
             except Exception as exc:
                 self._send_json({"ok": False, "message": str(exc)})
             return

@@ -351,13 +351,13 @@ class TestFactoryCodexBackend:
             factory_mod.create_client(
                 backend="codex",
                 openai_api_key="sk-test-key",
-                openai_model="codex-mini-latest",
+                openai_model="o4-mini",
             )
 
             MockCls.assert_called_once_with(
                 base_url="https://api.openai.com/v1",
                 api_key="sk-test-key",
-                default_model="codex-mini-latest",
+                default_model="o4-mini",
             )
 
     def test_create_client_codex_reads_env_api_key(self):
@@ -379,7 +379,7 @@ class TestFactoryCodexBackend:
 
                 factory_mod.create_client(
                     backend="codex",
-                    openai_model="codex-mini-latest",
+                    openai_model="o4-mini",
                 )
 
                 MockCls.assert_called_once()

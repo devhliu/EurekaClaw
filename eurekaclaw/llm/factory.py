@@ -10,9 +10,11 @@ from eurekaclaw.llm.base import LLMClient
 # "openrouter" → openai_compat with https://openrouter.ai/api/v1
 # "local"      → openai_compat with http://localhost:8000/v1 (vLLM default)
 # "minimax"    → openai_compat with https://api.minimaxi.chat/v1
-# "codex"      → openai_compat with https://api.openai.com/v1
-#                OPENAI_COMPAT_API_KEY is injected at runtime by codex_manager
-#                when CODEX_AUTH_MODE=oauth
+# "codex"      → when CODEX_AUTH_MODE=oauth, uses the Responses API adapter
+#                (OAuth tokens are billed via ChatGPT subscription, which
+#                 only works with the Responses API, not Chat Completions).
+#                When CODEX_AUTH_MODE=api_key, falls through to openai_compat
+#                with https://api.openai.com/v1 (regular API billing).
 _BACKEND_ALIASES: dict[str, tuple[str, str]] = {
     "openrouter": ("openai_compat", "https://openrouter.ai/api/v1"),
     "local": ("openai_compat", "http://localhost:8000/v1"),
@@ -35,7 +37,7 @@ def create_client(
         backend:           Override for settings.llm_backend.
                            Values: "anthropic" (default), "openai_compat",
                                    "openrouter" (shortcut), "local" (shortcut),
-                                   "minimax" (shortcut).
+                                   "minimax" (shortcut), "codex".
         anthropic_api_key: Override for settings.anthropic_api_key.
         openai_base_url:   Override for settings.openai_compat_base_url.
         openai_api_key:    Override for settings.openai_compat_api_key.
@@ -44,9 +46,42 @@ def create_client(
     from eurekaclaw.config import settings
 
     original_backend = backend or settings.llm_backend
-    resolved_backend = original_backend
 
-    # Resolve named shortcuts to openai_compat with preset base URLs
+    # ── Codex + OAuth → ChatGPT backend Codex adapter ───────────────
+    # OAuth tokens from the Codex CLI are scoped for the ChatGPT backend
+    # (chatgpt.com/backend-api/codex/responses), not the standard OpenAI API.
+    # The Chat Completions API rejects them with 429 "insufficient_quota"
+    # and the standard Responses API rejects them with 401 "missing scopes".
+    if original_backend == "codex" and settings.codex_auth_mode == "oauth":
+        from eurekaclaw.llm.openai_responses import OpenAIResponsesAdapter
+
+        api_key = (
+            openai_api_key
+            or os.environ.get("OPENAI_COMPAT_API_KEY")
+            or settings.openai_compat_api_key
+        )
+        model = openai_model or settings.codex_model
+
+        # Read account_id from Codex CLI credentials (needed for the
+        # ChatGPT-Account-Id header that the backend requires).
+        account_id = os.environ.get("CODEX_ACCOUNT_ID", "")
+        if not account_id:
+            try:
+                from eurekaclaw.codex_manager import _load_valid_tokens
+                tokens = _load_valid_tokens()
+                if tokens:
+                    account_id = tokens.get("account_id", "")
+            except Exception:
+                pass
+
+        return OpenAIResponsesAdapter(
+            api_key=api_key or "EMPTY",
+            default_model=model,
+            account_id=account_id,
+        )
+
+    # ── Resolve backend aliases ────────────────────────────────────
+    resolved_backend = original_backend
     default_base_url = ""
     if resolved_backend in _BACKEND_ALIASES:
         resolved_backend, default_base_url = _BACKEND_ALIASES[resolved_backend]
