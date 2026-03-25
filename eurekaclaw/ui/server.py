@@ -954,9 +954,11 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
     auth_mode = str(config.get("anthropic_auth_mode", "api_key"))
     codex_auth = str(config.get("codex_auth_mode", "api_key"))
 
-    # Resolve model: codex uses codex_model, others use fast/compat/main
+    # Resolve model per backend.
     if backend == "codex":
         model = str(config.get("codex_model") or "o4-mini")
+    elif backend == "minimax":
+        model = str(config.get("minimax_model") or "")
     else:
         model = str(
             config.get("eurekaclaw_fast_model")
@@ -975,12 +977,17 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
                     openai_model=str(config.get("codex_model") or ""),
                 )
             else:
+                openai_api_key = str(config.get("openai_compat_api_key", "") or "")
+                openai_model = str(config.get("openai_compat_model", "") or "")
+                if backend == "minimax":
+                    openai_api_key = str(config.get("minimax_api_key", "") or "")
+                    openai_model = str(config.get("minimax_model", "") or "")
                 client = create_client(
                     backend=backend,
                     anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
                     openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
-                    openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
-                    openai_model=str(config.get("openai_compat_model", "") or ""),
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
                 )
             response = await client.messages.create(
                 model=model,
