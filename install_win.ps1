@@ -17,6 +17,8 @@ param(
     [switch]$Help
 )
 
+$UvBin = $null
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -89,6 +91,35 @@ if ($DryRun) {
 # ── [1/3] Prepare environment ─────────────────────────────────────────────────
 Write-Section "[1/3] Preparing environment"
 
+# ── uv ────────────────────────────────────────────────────────────────────────
+$uvCmd = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCmd) {
+    $uvLocal = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+    if (Test-Path $uvLocal) { $uvCmd = @{ Source = $uvLocal } }
+}
+if ($uvCmd) {
+    $UvBin = $uvCmd.Source
+    Write-Success "uv found: $(& $UvBin --version 2>&1) ($UvBin)"
+} else {
+    Write-Info "uv not found — installing"
+    try {
+        $uvInstall = (Invoke-RestMethod "https://astral.sh/uv/install.ps1" -ErrorAction Stop)
+        Invoke-Expression $uvInstall
+        # Refresh PATH
+        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" +
+                    [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        $uvCmd2 = Get-Command uv -ErrorAction SilentlyContinue
+        if ($uvCmd2) {
+            $UvBin = $uvCmd2.Source
+            Write-Success "uv installed: $(& $UvBin --version 2>&1)"
+        } else {
+            Write-Warn "uv not found after install — will fall back to pip"
+        }
+    } catch {
+        Write-Warn "uv install failed — will fall back to pip"
+    }
+}
+
 # ── Python ────────────────────────────────────────────────────────────────────
 $MIN_MAJOR = 3; $MIN_MINOR = 11
 $PythonBin = $null
@@ -117,6 +148,21 @@ foreach ($c in $candidates) {
 if ($PythonBin) {
     $pyver = & $PythonBin --version 2>&1
     Write-Success "Python found: $pyver ($PythonBin)"
+} elseif ($UvBin) {
+    Write-Info "Python $MIN_MAJOR.$MIN_MINOR+ not found — installing via uv"
+    Invoke-Step "Installing Python 3.11 via uv" {
+        & $UvBin python install 3.11
+        if ($LASTEXITCODE -ne 0) { throw "uv python install failed" }
+    }
+    $uvPython = (& $UvBin python find 3.11 2>$null)
+    if ($uvPython -and (Test-Path $uvPython)) {
+        $PythonBin = $uvPython
+        Write-Success "Python installed via uv: $(& $PythonBin --version 2>&1)"
+    } else {
+        Write-Err "uv python install succeeded but Python not found on PATH."
+        Write-Host "  Install Python manually from https://python.org and re-run."
+        exit 1
+    }
 } else {
     Write-Warn "Python $MIN_MAJOR.$MIN_MINOR+ not found."
     Write-Host ""
@@ -215,25 +261,46 @@ $PipBin   = Join-Path $VenvDir "Scripts\pip.exe"
 $ClawBin  = Join-Path $VenvDir "Scripts\eurekaclaw.exe"
 
 if (-not (Test-Path $VenvDir)) {
-    Invoke-Step "Creating virtual environment" {
-        & $PythonBin -m venv $VenvDir
-        if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
+    if ($UvBin) {
+        Invoke-Step "Creating virtual environment" {
+            & $UvBin venv --python $PythonBin $VenvDir
+            if ($LASTEXITCODE -ne 0) {
+                & $PythonBin -m venv $VenvDir
+                if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
+            }
+        }
+    } else {
+        Invoke-Step "Creating virtual environment" {
+            & $PythonBin -m venv $VenvDir
+            if ($LASTEXITCODE -ne 0) { throw "venv creation failed" }
+        }
     }
     Write-Success "Virtual environment created: $VenvDir"
 } else {
     Write-Info "Virtual environment already exists: $VenvDir"
 }
 
-Invoke-Step "Upgrading pip" {
-    & $PipBin install --quiet --upgrade pip
-}
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
-# pip install
+# Package install
 $InstallTarget = if ($Extras) { "${GitDir}[$Extras]" } else { $GitDir }
 Write-Info "Installing EurekaClaw$(if ($Extras) { " (extras: $Extras)" })"
-Invoke-Step "Installing EurekaClaw" {
-    & $PipBin install --quiet $InstallTarget
-    if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+if ($UvBin) {
+    Invoke-Step "Installing EurekaClaw" {
+        & $UvBin pip install --python $VenvPython $InstallTarget
+        if ($LASTEXITCODE -ne 0) {
+            & $PipBin install --quiet $InstallTarget
+            if ($LASTEXITCODE -ne 0) { throw "package install failed" }
+        }
+    }
+} else {
+    Invoke-Step "Upgrading pip" {
+        & $PipBin install --quiet --upgrade pip
+    }
+    Invoke-Step "Installing EurekaClaw" {
+        & $PipBin install --quiet $InstallTarget
+        if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+    }
 }
 Write-Success "EurekaClaw installed into virtual environment"
 
