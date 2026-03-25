@@ -920,22 +920,36 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
     """Initialize the configured client and perform a minimal text-generation check."""
     backend = str(config.get("llm_backend", "anthropic"))
     auth_mode = str(config.get("anthropic_auth_mode", "api_key"))
-    model = str(
-        config.get("eurekaclaw_fast_model")
-        or config.get("openai_compat_model")
-        or config.get("eurekaclaw_model")
-        or ""
-    )
+    codex_auth = str(config.get("codex_auth_mode", "api_key"))
+
+    # Resolve model: codex uses codex_model, others use fast/compat/main
+    if backend == "codex":
+        model = str(config.get("codex_model") or "o4-mini")
+    else:
+        model = str(
+            config.get("eurekaclaw_fast_model")
+            or config.get("openai_compat_model")
+            or config.get("eurekaclaw_model")
+            or ""
+        )
 
     try:
         with _temporary_auth_env(config):
-            client = create_client(
-                backend=backend,
-                anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
-                openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
-                openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
-                openai_model=str(config.get("openai_compat_model", "") or ""),
-            )
+            # For codex OAuth, don't pass openai_api_key — it's injected into
+            # env by maybe_setup_codex_auth() inside _temporary_auth_env.
+            if backend == "codex" and codex_auth == "oauth":
+                client = create_client(
+                    backend=backend,
+                    openai_model=str(config.get("codex_model") or ""),
+                )
+            else:
+                client = create_client(
+                    backend=backend,
+                    anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
+                    openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
+                    openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
+                    openai_model=str(config.get("openai_compat_model", "") or ""),
+                )
             response = await client.messages.create(
                 model=model,
                 max_tokens=16,
