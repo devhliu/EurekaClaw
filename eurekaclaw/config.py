@@ -52,7 +52,7 @@ class Config(BaseSettings):
     codex_auth_mode: Literal["api_key", "oauth"] = Field(
         default="api_key", alias="CODEX_AUTH_MODE"
     )
-    codex_model: str = Field(default="codex-mini-latest", alias="CODEX_MODEL")
+    codex_model: str = Field(default="o4-mini", alias="CODEX_MODEL")
 
     # ---- External APIs -----------------------------------------------------
     brave_search_api_key: str = Field(default="", alias="BRAVE_SEARCH_API_KEY")

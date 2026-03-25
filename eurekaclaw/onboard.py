@@ -307,7 +307,7 @@ def run_onboard(non_interactive: bool, reset: bool, env_file: str) -> None:
             )
         cfg["CODEX_MODEL"] = ask(
             "  CODEX_MODEL",
-            get("CODEX_MODEL", "codex-mini-latest"),
+            get("CODEX_MODEL", "o4-mini"),
         )
         cfg["ANTHROPIC_AUTH_MODE"] = get("ANTHROPIC_AUTH_MODE", "api_key")
         cfg["CCPROXY_PORT"] = get("CCPROXY_PORT", "8765")
