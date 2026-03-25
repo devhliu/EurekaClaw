@@ -56,22 +56,22 @@ export function AuthGuidance({ backend, authMode, ccproxyPort }: AuthGuidancePro
       },
     ];
   } else if (backend === 'codex' && authMode === 'oauth') {
-    title = 'Codex OAuth setup guide';
+    title = 'Codex CLI setup guide';
     steps = [
       {
         heading: 'Prerequisites',
         items: [
+          'An active ChatGPT Plus or Pro subscription',
           'Install the Codex CLI: npm install -g @openai/codex',
           'Login with the Codex CLI: codex auth login',
-          'This stores credentials in ~/.codex/auth.json',
         ],
       },
       {
         heading: 'In EurekaClaw',
         items: [
-          'Click "Import Codex credentials" to read the Codex CLI token',
+          'Click "Import" to read the Codex CLI token',
           'Click "Save & test" to verify the connection',
-          'No API key needed — OAuth token is used automatically',
+          'Uses the Responses API — billed to your ChatGPT subscription',
         ],
       },
     ];

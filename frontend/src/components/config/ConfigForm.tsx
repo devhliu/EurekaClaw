@@ -32,8 +32,13 @@ const AUTH_MODES = [
 
 const CODEX_AUTH_MODES = [
   { key: 'api_key', label: 'API Key', desc: 'Paste your OpenAI API key' },
-  { key: 'oauth', label: 'OAuth', desc: 'Login via Codex CLI (Codex subscription)' },
+  { key: 'oauth', label: 'Codex CLI', desc: 'Use ChatGPT Plus/Pro subscription via Codex CLI' },
 ] as const;
+
+// OAuth mode: only Codex-specific models work via ChatGPT backend
+const CODEX_OAUTH_MODELS = ['gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5-codex-mini', 'gpt-5-codex'] as const;
+// API key mode: any OpenAI model works via standard API
+const CODEX_APIKEY_MODELS = ['o4-mini', 'o3', 'gpt-4.1', 'gpt-4.1-mini'] as const;
 
 const GATE_MODES = [
   { key: 'auto', label: 'Smart', desc: 'Pause when confidence is low' },
@@ -229,12 +234,9 @@ export function ConfigForm({ onRefreshHealth }: Props) {
         return;
       }
     }
-    console.log("dfssdfsfdsdss")
     setStatus(saveAfter ? 'Testing & saving…' : 'Testing connection…', 'info');
     try {
-      console.log("this is xxx")
       const result = await apiPost<TestResponse>('/api/auth/test', config);
-      console.log("this is xxx")
       if (!result.ok) {
         const msg = result.message ?? 'unknown error';
         // If OAuth not installed, show install hint
@@ -400,24 +402,30 @@ export function ConfigForm({ onRefreshHealth }: Props) {
         )}
 
         {showCodex && (
-          <>
-            <div className="settings-card-group">
+          <div className="codex-panel">
+            {/* ── Auth mode segmented control ── */}
+            <div className="codex-auth-section">
               <p className="settings-field-label">Authentication</p>
-              <div className="settings-card-row settings-card-row--half">
+              <div className="codex-segment-control">
                 {CODEX_AUTH_MODES.map((a) => (
                   <button
                     key={a.key}
                     type="button"
-                    className={`settings-option-card${codexAuthMode === a.key ? ' is-active' : ''}`}
+                    className={`codex-segment-btn${codexAuthMode === a.key ? ' is-active' : ''}`}
                     onClick={() => handleChange('codex_auth_mode', a.key)}
                   >
-                    <span className="settings-option-label">{a.label}</span>
-                    <span className="settings-option-desc">{a.desc}</span>
+                    <span className="codex-segment-label">{a.label}</span>
                   </button>
                 ))}
               </div>
+              <p className="codex-auth-hint">
+                {codexAuthMode === 'oauth'
+                  ? 'Routes through ChatGPT backend — billed to your ChatGPT Plus/Pro subscription. Requires Codex-specific models.'
+                  : 'Uses Chat Completions API — billed to your OpenAI API credits'}
+              </p>
             </div>
 
+            {/* ── API Key input ── */}
             {showCodexApiKey && (
               <label className="settings-field">
                 <span className="settings-field-label">OpenAI API Key</span>
@@ -425,67 +433,93 @@ export function ConfigForm({ onRefreshHealth }: Props) {
               </label>
             )}
 
+            {/* ── OAuth setup checklist ── */}
             {showCodexOauth && (
-              <div className="settings-oauth-panel">
-                <div className="settings-oauth-status">
-                  <span className={`settings-oauth-dot${codexStatus?.installed && codexStatus?.authenticated ? ' is-ok' : ''}`} />
-                  <span className="settings-oauth-text">
-                    {!codexStatus ? 'Checking Codex CLI credentials…' :
-                     !codexStatus.installed ? 'Codex CLI not logged in' :
-                     !codexStatus.authenticated ? 'Credentials expired or invalid' :
-                     codexStatus.message}
-                  </span>
-                </div>
-                <div className="settings-oauth-actions">
+              <div className="codex-setup-checklist">
+                {/* Step 1: Credentials */}
+                <div className={`codex-check-item${codexStatus?.authenticated ? ' is-done' : ''}`}>
+                  <div className="codex-check-icon">
+                    {codexStatus?.authenticated
+                      ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="var(--ok)"/><path d="M4.5 8.5L7 11L11.5 5.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      : <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="var(--muted)" strokeWidth="1.5" strokeDasharray="3 2"/><text x="8" y="11" textAnchor="middle" fill="var(--muted)" fontSize="9" fontWeight="600">1</text></svg>
+                    }
+                  </div>
+                  <div className="codex-check-body">
+                    <span className="codex-check-title">Codex CLI credentials</span>
+                    <span className="codex-check-desc">
+                      {!codexStatus ? 'Checking…' :
+                       codexStatus.authenticated ? 'Token imported and ready' :
+                       'Run codex auth login, then import'}
+                    </span>
+                  </div>
                   {(!codexStatus || !codexStatus.authenticated) && (
                     <button
-                      className="settings-oauth-btn settings-oauth-btn--login"
+                      className="codex-check-btn"
                       type="button"
                       disabled={codexImporting}
                       onClick={() => void importCodexCredentials()}
                     >
-                      {codexImporting ? 'Importing…' : 'Import Codex credentials'}
+                      {codexImporting ? 'Importing…' : 'Import'}
                     </button>
                   )}
-                  {codexStatus?.authenticated && (
-                    <span className="settings-oauth-ok">Ready</span>
+                </div>
+
+                {/* Step 2: OpenAI package */}
+                <div className={`codex-check-item${openaiPkgStatus?.installed ? ' is-done' : ''}`}>
+                  <div className="codex-check-icon">
+                    {openaiPkgStatus?.installed
+                      ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="var(--ok)"/><path d="M4.5 8.5L7 11L11.5 5.5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      : <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="var(--muted)" strokeWidth="1.5" strokeDasharray="3 2"/><text x="8" y="11" textAnchor="middle" fill="var(--muted)" fontSize="9" fontWeight="600">2</text></svg>
+                    }
+                  </div>
+                  <div className="codex-check-body">
+                    <span className="codex-check-title">OpenAI Python package</span>
+                    <span className="codex-check-desc">
+                      {!openaiPkgStatus ? 'Checking…' :
+                       openaiPkgStatus.installed ? 'Installed' :
+                       'Required dependency for API calls'}
+                    </span>
+                  </div>
+                  {openaiPkgStatus && !openaiPkgStatus.installed && (
+                    <button
+                      className="codex-check-btn"
+                      type="button"
+                      disabled={installingOpenai}
+                      onClick={() => void installOpenai()}
+                    >
+                      {installingOpenai ? 'Installing…' : 'Install'}
+                    </button>
                   )}
                 </div>
               </div>
             )}
 
-            {/* OpenAI package status — mirrors Anthropic OAuth panel pattern */}
-            <div className="settings-oauth-panel">
-              <div className="settings-oauth-status">
-                <span className={`settings-oauth-dot${openaiPkgStatus?.installed ? ' is-ok' : ''}`} />
-                <span className="settings-oauth-text">
-                  {!openaiPkgStatus ? 'Checking OpenAI package…' :
-                   openaiPkgStatus.installed ? 'OpenAI package installed' :
-                   'OpenAI package not installed'}
-                </span>
-              </div>
-              <div className="settings-oauth-actions">
-                {(!openaiPkgStatus || !openaiPkgStatus.installed) && (
+            {/* ── Model selector with quick-pick chips ── */}
+            <div className="codex-model-section">
+              <label className="settings-field">
+                <span className="settings-field-label">Model</span>
+                <input
+                  type="text"
+                  name="codex_model"
+                  placeholder="o4-mini"
+                  value={val('codex_model')}
+                  onChange={(e) => handleChange('codex_model', e.target.value)}
+                />
+              </label>
+              <div className="codex-model-chips">
+                {(codexAuthMode === 'oauth' ? CODEX_OAUTH_MODELS : CODEX_APIKEY_MODELS).map((m) => (
                   <button
-                    className="settings-oauth-btn"
+                    key={m}
                     type="button"
-                    disabled={installingOpenai}
-                    onClick={() => void installOpenai()}
+                    className={`codex-model-chip${val('codex_model') === m ? ' is-active' : ''}`}
+                    onClick={() => handleChange('codex_model', m)}
                   >
-                    {installingOpenai ? 'Installing…' : 'Install OpenAI package'}
+                    {m}
                   </button>
-                )}
-                {openaiPkgStatus?.installed && (
-                  <span className="settings-oauth-ok">Installed</span>
-                )}
+                ))}
               </div>
             </div>
-
-            <label className="settings-field">
-              <span className="settings-field-label">Model</span>
-              <input type="text" name="codex_model" placeholder="o4-mini" value={val('codex_model')} onChange={(e) => handleChange('codex_model', e.target.value)} />
-            </label>
-          </>
+          </div>
         )}
 
         <AuthGuidance backend={backend} authMode={showCodex ? codexAuthMode : authMode} ccproxyPort={ccproxyPort} />

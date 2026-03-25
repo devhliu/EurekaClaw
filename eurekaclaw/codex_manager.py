@@ -65,6 +65,7 @@ def _read_codex_cli_tokens() -> dict[str, Any] | None:
         "access_token": tokens["access_token"],
         "refresh_token": tokens.get("refresh_token", ""),
         "id_token": tokens.get("id_token", ""),
+        "account_id": tokens.get("account_id", ""),
         "auth_mode": raw.get("auth_mode", "chatgpt"),
         "last_refresh": raw.get("last_refresh", ""),
         # No expires_in in Codex CLI format — token_store.is_token_expired
