@@ -62,8 +62,9 @@ export function ConfigForm({ onRefreshHealth }: Props) {
   const [openaiPkgStatus, setOpenaiPkgStatus] = useState<{ installed: boolean } | null>(null);
   const [installingOpenai, setInstallingOpenai] = useState(false);
 
-  const backend = (config.llm_backend as string) || 'anthropic';
-  const authMode = (config.anthropic_auth_mode as string) || 'api_key';
+  const rawBackend = (config.llm_backend as string) || 'anthropic';
+  const backend = rawBackend === 'oauth' ? 'anthropic' : rawBackend;
+  const authMode = rawBackend === 'oauth' ? 'oauth' : ((config.anthropic_auth_mode as string) || 'api_key');
   const codexAuthMode = (config.codex_auth_mode as string) || 'api_key';
   const ccproxyPort = String(config.ccproxy_port || '8000');
 

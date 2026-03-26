@@ -19,7 +19,7 @@ export function AuthGuidance({ backend, authMode, ccproxyPort }: AuthGuidancePro
       {
         heading: 'Configure',
         items: [
-          'Set backend to Anthropic',
+          'Set backend to Anthropic or legacy oauth',
           'Set auth mode to OAuth',
           `Choose ccproxy port (e.g. ${ccproxyPort})`,
           'Leave API key empty',
