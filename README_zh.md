@@ -240,6 +240,12 @@ EurekaClaw站在AI智能体开发和AI赋能的科学研究成果的肩膀上。
 
 ---
 
+## 星标历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EurekaClaw/EurekaClaw&type=Date)](https://www.star-history.com/#EurekaClaw/EurekaClaw&Date)
+
+
+
 ## 引用
 
 如果你在研究中使用了 EurekaClaw，请引用：
