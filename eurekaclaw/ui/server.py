@@ -814,7 +814,14 @@ def _preflight_check(config: dict[str, Any]) -> None:
     _canonical, _default_base = _BACKEND_ALIASES.get(original_backend, (original_backend, ""))
     backend = _canonical if _canonical != original_backend else original_backend
 
-    if backend == "openai_compat":
+    if original_backend == "minimax":
+        api_key = str(config.get("minimax_api_key", "") or "")
+        if not api_key:
+            raise ValueError(
+                "MINIMAX_API_KEY is not set. "
+                "Configure it in the UI settings or .env before starting a session."
+            )
+    elif backend == "openai_compat":
         base_url = str(config.get("openai_compat_base_url", "") or "") or _default_base
         if not base_url:
             raise ValueError(
@@ -928,7 +935,9 @@ def _temporary_auth_env(config: dict[str, Any]):
         if api_key:
             os.environ["ANTHROPIC_API_KEY"] = api_key
 
-        if config.get("llm_backend") == "anthropic" and config.get("anthropic_auth_mode") == "oauth":
+        backend = str(config.get("llm_backend", "anthropic"))
+
+        if backend in {"anthropic", "oauth"} and config.get("anthropic_auth_mode") == "oauth":
             proc = maybe_start_ccproxy()
 
         if config.get("llm_backend") == "codex" and config.get("codex_auth_mode") == "oauth":
@@ -977,15 +986,18 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
                     openai_model=str(config.get("codex_model") or ""),
                 )
             else:
+                openai_base_url = str(config.get("openai_compat_base_url", "") or "")
                 openai_api_key = str(config.get("openai_compat_api_key", "") or "")
                 openai_model = str(config.get("openai_compat_model", "") or "")
                 if backend == "minimax":
+                    openai_base_url = ""
                     openai_api_key = str(config.get("minimax_api_key", "") or "")
                     openai_model = str(config.get("minimax_model", "") or "")
+                effective_backend = "anthropic" if backend == "oauth" else backend
                 client = create_client(
-                    backend=backend,
+                    backend=effective_backend,
                     anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
-                    openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
+                    openai_base_url=openai_base_url,
                     openai_api_key=openai_api_key,
                     openai_model=openai_model,
                 )
