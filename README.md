@@ -240,6 +240,11 @@ EurekaClaw builds on ideas and inspiration from the broader AI-for-science commu
 
 ---
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EurekaClaw/EurekaClaw&type=Date)](https://www.star-history.com/#EurekaClaw/EurekaClaw&Date)
+
+
 ## Citation
 
 If you use EurekaClaw in your research, please cite:
