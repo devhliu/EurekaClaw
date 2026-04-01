@@ -5,11 +5,16 @@
 #   Stage 2 (runtime):          Python 3.11 + Node.js 18 + all dependencies
 #
 # Usage:
-#   # Build
-#   docker build -t eurekaclaw .
+#   # Build (current platform only)
+#   docker build -t chenggongzhang/eurekaclaw .
 #
 #   # GPU build (NVIDIA)
-#   docker build --build-arg BASE_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 -t eurekaclaw:gpu .
+#   docker build --build-arg BASE_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 \
+#     -t chenggongzhang/eurekaclaw:gpu .
+#
+#   # Multi-platform build + push (amd64 + arm64)
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t chenggongzhang/eurekaclaw:latest --push .
 #
 #   # Run UI (default)
 #   docker run --rm -it -p 8080:8080 -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw

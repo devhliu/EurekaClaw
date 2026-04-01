@@ -16,14 +16,16 @@
 #   make uv-install       → uv venv + uv pip install -e "." + npm install (faster)
 #
 # Docker:
-#   make docker           → build Docker image (CPU)
-#   make docker-gpu       → build Docker image (NVIDIA GPU)
+#   make docker           → build Docker image (CPU, current platform)
+#   make docker-gpu       → build Docker image (NVIDIA GPU, current platform)
+#   make docker-push      → build + push multi-platform CPU image (amd64 + arm64)
+#   make docker-push-gpu  → build + push multi-platform GPU image (amd64 + arm64)
 #   make docker-run       → run UI in Docker at http://localhost:8080
 #   make docker-run-gpu   → run UI in Docker with GPU at http://localhost:8080
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: start open dev build typecheck install uv-install \
-        docker docker-gpu docker-run docker-run-gpu
+        docker docker-gpu docker-push docker-push-gpu docker-run docker-run-gpu
 
 # ── Production: build then serve ─────────────────────────────────────────────
 start: build
@@ -61,6 +63,15 @@ docker:
 docker-gpu:
 	docker build --build-arg BASE_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 \
 		-t chenggongzhang/eurekaclaw:gpu .
+
+docker-push:
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-t chenggongzhang/eurekaclaw:latest --push .
+
+docker-push-gpu:
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		--build-arg BASE_IMAGE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 \
+		-t chenggongzhang/eurekaclaw:gpu --push .
 
 docker-run:
 	docker run --rm -it -p 8080:8080 --env-file .env \
