@@ -19,7 +19,7 @@ from eurekaclaw.config import settings
 
 from eurekaclaw.agents.theory.checkpoint import ProofCheckpoint
 from eurekaclaw.types.artifacts import TheoryState
-from eurekaclaw.console import console
+from eurekaclaw.console import console, UiHtmlLogHandler
 
 _console_html_path = Path("eurekaclaw_terminal.html")
 _should_save_html = False
@@ -29,11 +29,9 @@ def _save_console_html() -> None:
     """Export the terminal session to an HTML file on exit."""
     if not _should_save_html:
         return
-    import datetime
     try:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_path = _console_html_path.with_name(f"eurekaclaw_terminal_{timestamp}.html")
-        console.save_html(str(export_path))
+        from eurekaclaw.main import save_console_html_artifact
+        save_console_html_artifact(_console_html_path.parent, stem=_console_html_path.stem)
     except Exception:
         pass
 
@@ -47,6 +45,12 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(message)s",
         handlers=[RichHandler(console=console, rich_tracebacks=True, show_path=False)],
     )
+    root = logging.getLogger()
+    if not any(isinstance(handler, UiHtmlLogHandler) for handler in root.handlers):
+        html_handler = UiHtmlLogHandler()
+        html_handler.setLevel(level)
+        html_handler.setFormatter(logging.Formatter("%(message)s"))
+        root.addHandler(html_handler)
     logging.getLogger("anthropic").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -309,6 +313,13 @@ def replay_theory_tail(session_id: str, from_stage: str) -> None:
         except (RuntimeError, ValueError) as exc:
             console.print(f"[red]ccproxy error: {exc}[/red]")
             sys.exit(1)
+    if settings.llm_backend == "codex" and settings.codex_auth_mode == "oauth":
+        try:
+            from eurekaclaw.codex_manager import maybe_setup_codex_auth
+            maybe_setup_codex_auth()
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[red]Codex auth error: {exc}[/red]")
+            sys.exit(1)
 
     session_dir = settings.runs_dir / session_id
     if not session_dir.exists():
@@ -404,6 +415,13 @@ def test_paper_reader(session_id: str, paper_ref: str, mode: str, direction: str
         except (RuntimeError, ValueError) as exc:
             console.print(f"[red]ccproxy error: {exc}[/red]")
             sys.exit(1)
+    if settings.llm_backend == "codex" and settings.codex_auth_mode == "oauth":
+        try:
+            from eurekaclaw.codex_manager import maybe_setup_codex_auth
+            maybe_setup_codex_auth()
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[red]Codex auth error: {exc}[/red]")
+            sys.exit(1)
 
     session_dir = settings.runs_dir / session_id
     if not session_dir.exists():
@@ -496,6 +514,68 @@ def test_paper_reader(session_id: str, paper_ref: str, mode: str, direction: str
 
 
 @main.command()
+@click.option(
+    "--provider", "-p",
+    required=True,
+    help="OAuth provider to read credentials from. Currently supported: openai-codex",
+)
+def login(provider: str) -> None:
+    """Import credentials from an external provider's CLI into EurekaClaw.
+
+    For openai-codex, reads the token that the official Codex CLI stored after
+    you ran ``codex auth login``, and copies it into EurekaClaw's credential
+    store so it is used automatically on future runs.
+
+    Prerequisites:
+
+        npm install -g @openai/codex
+        codex auth login        # opens browser, one-time
+
+    Then:
+
+        eurekaclaw login --provider openai-codex
+    """
+    from eurekaclaw.auth.providers import get_provider
+    from eurekaclaw.auth.token_store import save_tokens
+
+    try:
+        prov = get_provider(provider)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    if provider == "openai-codex":
+        from eurekaclaw.codex_manager import _CODEX_CLI_AUTH_PATH, _read_codex_cli_tokens
+
+        if not _CODEX_CLI_AUTH_PATH.exists():
+            console.print(
+                f"[red]Codex CLI credentials not found at {_CODEX_CLI_AUTH_PATH}[/red]\n"
+                "[dim]Log in first with the Codex CLI:\n"
+                "  npm install -g @openai/codex\n"
+                "  codex auth login[/dim]"
+            )
+            sys.exit(1)
+
+        tokens = _read_codex_cli_tokens()
+        if not tokens or not tokens.get("access_token"):
+            console.print(
+                f"[red]Could not read a valid access_token from {_CODEX_CLI_AUTH_PATH}[/red]\n"
+                "[dim]Try re-authenticating with: codex auth login[/dim]"
+            )
+            sys.exit(1)
+
+        save_tokens(provider, tokens)
+        console.print(f"[green]✓ Codex credentials imported from {_CODEX_CLI_AUTH_PATH}[/green]")
+        console.print(
+            "[dim]Set [bold]LLM_BACKEND=codex[/bold] and "
+            "[bold]CODEX_AUTH_MODE=oauth[/bold] in your .env to use them.[/dim]"
+        )
+    else:
+        console.print(f"[red]No login handler for provider {provider!r}.[/red]")
+        sys.exit(1)
+
+
+@main.command()
 @click.option("--non-interactive", is_flag=True, help="Write defaults without prompting.")
 @click.option("--reset", is_flag=True, help="Overwrite existing .env without merging.")
 @click.option("--env-file", default=".env", show_default=True, help="Path to the .env file to write.")
@@ -548,6 +628,9 @@ def install_skills(force: bool, skillname: str = "") -> None:
 @click.option("--open-browser/--no-open-browser", default=False, help="Open the UI in the default browser.")
 def ui(host: str, port: int, open_browser: bool) -> None:
     """Launch the EurekaClaw browser UI."""
+    global _should_save_html
+    _should_save_html = False
+
     import threading
     import time
     import webbrowser
@@ -746,7 +829,7 @@ def _run_session(
 ) -> None:
     """Common session runner."""
     import os
-    from eurekaclaw.main import EurekaSession, save_artifacts
+    from eurekaclaw.main import EurekaSession, save_artifacts, save_console_html_artifact
     from eurekaclaw.types.tasks import InputSpec
 
     session = EurekaSession()
@@ -776,6 +859,15 @@ def _run_session(
                 atexit.register(stop_ccproxy, _ccproxy_proc)
         except (RuntimeError, ValueError) as exc:
             console.print(f"[red]ccproxy error: {exc}[/red]")
+            sys.exit(1)
+
+    # --- codex: inject OAuth token if LLM_BACKEND=codex + CODEX_AUTH_MODE=oauth
+    if settings.llm_backend == "codex" and settings.codex_auth_mode == "oauth":
+        try:
+            from eurekaclaw.codex_manager import maybe_setup_codex_auth
+            maybe_setup_codex_auth()
+        except (RuntimeError, ValueError) as exc:
+            console.print(f"[red]Codex auth error: {exc}[/red]")
             sys.exit(1)
 
     spec = InputSpec(
@@ -813,6 +905,7 @@ def _run_session(
         return
 
     out = save_artifacts(result, out_dir_path)
+    save_console_html_artifact(out)
     console.print(f"[green]Artifacts saved to {out}[/green]")
 
 

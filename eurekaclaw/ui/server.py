@@ -24,8 +24,9 @@ import sys as _sys
 
 from eurekaclaw.ccproxy_manager import maybe_start_ccproxy, stop_ccproxy, is_ccproxy_available, check_ccproxy_auth, _oauth_install_hint
 from eurekaclaw.config import settings
+from eurekaclaw.console import close_ui_html_sink, register_ui_html_sink
 from eurekaclaw.llm import create_client
-from eurekaclaw.main import EurekaSession, save_artifacts, _compile_pdf
+from eurekaclaw.main import EurekaSession, save_artifacts, save_console_html_artifact, _compile_pdf
 from eurekaclaw.skills.registry import SkillRegistry
 from eurekaclaw.types.tasks import InputSpec, ResearchOutput, TaskStatus
 
@@ -35,6 +36,7 @@ _ROOT_DIR = Path(__file__).resolve().parents[2]
 _FRONTEND_DIR = Path(__file__).resolve().parent / "static"
 _DEV_FRONTEND_DIR = _ROOT_DIR / "frontend"
 _ENV_PATH = _ROOT_DIR / ".env"
+_UI_LAUNCH_DIR = _ROOT_DIR / "launch_from_ui"
 
 _CONFIG_FIELDS: dict[str, str] = {
     "llm_backend": "LLM_BACKEND",
@@ -47,6 +49,8 @@ _CONFIG_FIELDS: dict[str, str] = {
     "openai_compat_model": "OPENAI_COMPAT_MODEL",
     "minimax_api_key": "MINIMAX_API_KEY",
     "minimax_model": "MINIMAX_MODEL",
+    "codex_auth_mode": "CODEX_AUTH_MODE",
+    "codex_model": "CODEX_MODEL",
     "eurekaclaw_mode": "EUREKACLAW_MODE",
     "gate_mode": "GATE_MODE",
     "experiment_mode": "EXPERIMENT_MODE",
@@ -73,11 +77,6 @@ _CONFIG_FIELDS: dict[str, str] = {
     "max_tokens_sketch": "MAX_TOKENS_SKETCH",
     "max_tokens_verifier": "MAX_TOKENS_VERIFIER",
     "max_tokens_compress": "MAX_TOKENS_COMPRESS",
-    "max_tokens_crystallizer": "MAX_TOKENS_CRYSTALLIZER",
-    "max_tokens_assembler": "MAX_TOKENS_ASSEMBLER",
-    "max_tokens_architect": "MAX_TOKENS_ARCHITECT",
-    "max_tokens_analyst": "MAX_TOKENS_ANALYST",
-    "max_tokens_sketch": "MAX_TOKENS_SKETCH",
 }
 
 
@@ -297,6 +296,9 @@ class UIServerState:
 
     def create_run(self, input_spec: InputSpec) -> SessionRun:
         run = SessionRun(run_id=str(uuid.uuid4()), input_spec=input_spec)
+        out_dir = _ROOT_DIR / "results" / run.run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        run.output_dir = str(out_dir)
         with self._lock:
             self.runs[run.run_id] = run
         self._persist_run(run)
@@ -367,7 +369,9 @@ class UIServerState:
         run.eureka_session = None
         run.eureka_session_id = ""
         run.output_summary = {}
-        run.output_dir = ""
+        out_dir = _ROOT_DIR / "results" / run.run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        run.output_dir = str(out_dir)
         self._persist_run(run)
         self.start_run(run)
         return self.snapshot_run(run)
@@ -446,6 +450,8 @@ class UIServerState:
         run.paused_stage = ""
         run.updated_at = datetime.utcnow()
         self._persist_run(run)
+        launch_html_path = _UI_LAUNCH_DIR / f"{run.run_id}.html"
+        register_ui_html_sink(launch_html_path)
 
         try:
             session = run.eureka_session
@@ -587,8 +593,25 @@ class UIServerState:
                         wloop.close()
                         asyncio.set_event_loop(None)
 
+            # Collect outputs and save artifacts so PDF compilation works.
+            brief = session.bus.get_research_brief()
+            if brief:
+                orch = session.orchestrator
+                result = orch._collect_outputs(brief)
+                run.result = result
+                out_dir = save_artifacts(result, _ROOT_DIR / "results" / run.run_id)
+                save_console_html_artifact(out_dir)
+                run.output_dir = str(out_dir)
+                run.output_summary = {
+                    "latex_paper_length": len(result.latex_paper),
+                    "has_theory_state": bool(result.theory_state_json),
+                    "output_dir": str(out_dir),
+                    "resumed": True,
+                }
+            else:
+                run.output_summary = {"resumed": True, "session_id": session_id}
+
             run.status = "completed"
-            run.output_summary = {"resumed": True, "session_id": session_id}
 
         except Exception as exc:
             from eurekaclaw.agents.theory.checkpoint import ProofPausedException  # noqa: F811
@@ -605,6 +628,7 @@ class UIServerState:
                 run.error = str(exc)
                 run.error_category = _classify_error(exc)
         finally:
+            close_ui_html_sink()
             run.completed_at = datetime.utcnow()
             run.updated_at = datetime.utcnow()
             self._persist_run(run)
@@ -617,6 +641,8 @@ class UIServerState:
         run.status = "running"
         run.started_at = datetime.utcnow()
         run.updated_at = datetime.utcnow()
+        launch_html_path = _UI_LAUNCH_DIR / f"{run.run_id}.html"
+        register_ui_html_sink(launch_html_path)
 
         try:
             # Pre-flight: verify credentials before spending time initialising agents
@@ -679,6 +705,7 @@ class UIServerState:
 
             # Save artifacts to results/<run_id>/ so files are always on disk.
             out_dir = save_artifacts(result, _ROOT_DIR / "results" / run.run_id)
+            save_console_html_artifact(out_dir)
             run.output_dir = str(out_dir)
 
             run.status = "completed"
@@ -703,6 +730,7 @@ class UIServerState:
                 run.error = str(exc)
                 run.error_category = _classify_error(exc)
         finally:
+            close_ui_html_sink()
             if run.eureka_session_id:
                 from eurekaclaw.ui import review_gate as _rg
                 _rg.unregister_all(run.eureka_session_id)
@@ -746,6 +774,7 @@ class UIServerState:
             "run_id": run.run_id,
             "name": run.name,
             "session_id": run.eureka_session_id,
+            "launch_html_url": f"/api/runs/{run.run_id}/launch-html",
             "status": run.status,
             "error": run.error,
             "error_category": run.error_category,
@@ -817,21 +846,32 @@ def _preflight_check(config: dict[str, Any]) -> None:
     """
     from eurekaclaw.llm.factory import _BACKEND_ALIASES
 
-    backend = str(config.get("llm_backend", "anthropic"))
+    original_backend = str(config.get("llm_backend", "anthropic"))
     auth_mode = str(config.get("anthropic_auth_mode", "api_key"))
+    codex_auth_mode = str(config.get("codex_auth_mode", "api_key"))
 
-    # Resolve shortcut backends (openrouter, local) → (openai_compat, default_base_url)
-    _canonical, _default_base = _BACKEND_ALIASES.get(backend, (backend, ""))
-    if _canonical != backend:
-        backend = _canonical
+    # Resolve shortcut backends (openrouter, local, codex) → (openai_compat, default_base_url)
+    _canonical, _default_base = _BACKEND_ALIASES.get(original_backend, (original_backend, ""))
+    backend = _canonical if _canonical != original_backend else original_backend
 
-    if backend == "openai_compat":
+    if original_backend == "minimax":
+        api_key = str(config.get("minimax_api_key", "") or "")
+        if not api_key:
+            raise ValueError(
+                "MINIMAX_API_KEY is not set. "
+                "Configure it in the UI settings or .env before starting a session."
+            )
+    elif backend == "openai_compat":
         base_url = str(config.get("openai_compat_base_url", "") or "") or _default_base
         if not base_url:
             raise ValueError(
                 "OPENAI_COMPAT_BASE_URL is not set. "
                 "Configure it in the UI settings or .env before starting a session."
             )
+        # Skip API key check for codex OAuth — the key is injected at runtime
+        # by maybe_setup_codex_auth() before the LLM client is created.
+        if original_backend == "codex" and codex_auth_mode == "oauth":
+            return
         api_key = str(config.get("openai_compat_api_key", "") or "")
         if not api_key:
             raise ValueError(
@@ -917,30 +957,39 @@ def _merged_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
 @contextmanager
 def _temporary_auth_env(config: dict[str, Any]):
     """Temporarily align settings/env for auth checks, then restore them."""
-    env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]
+    env_keys = ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_COMPAT_API_KEY"]
     old_env = {key: os.environ.get(key) for key in env_keys}
     old_settings = {
         "anthropic_auth_mode": settings.anthropic_auth_mode,
         "ccproxy_port": settings.ccproxy_port,
+        "codex_auth_mode": settings.codex_auth_mode,
     }
     proc = None
 
     try:
         settings.anthropic_auth_mode = str(config.get("anthropic_auth_mode", settings.anthropic_auth_mode))
         settings.ccproxy_port = int(config.get("ccproxy_port", settings.ccproxy_port))
+        settings.codex_auth_mode = str(config.get("codex_auth_mode", settings.codex_auth_mode))
 
         api_key = str(config.get("anthropic_api_key", "") or "")
         if api_key:
             os.environ["ANTHROPIC_API_KEY"] = api_key
 
-        if config.get("llm_backend") == "anthropic" and config.get("anthropic_auth_mode") == "oauth":
+        backend = str(config.get("llm_backend", "anthropic"))
+
+        if backend in {"anthropic", "oauth"} and config.get("anthropic_auth_mode") == "oauth":
             proc = maybe_start_ccproxy()
+
+        if config.get("llm_backend") == "codex" and config.get("codex_auth_mode") == "oauth":
+            from eurekaclaw.codex_manager import maybe_setup_codex_auth
+            maybe_setup_codex_auth()
 
         yield
     finally:
         stop_ccproxy(proc)
         settings.anthropic_auth_mode = old_settings["anthropic_auth_mode"]
         settings.ccproxy_port = old_settings["ccproxy_port"]
+        settings.codex_auth_mode = old_settings["codex_auth_mode"]
         for key, value in old_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -952,22 +1001,46 @@ async def _test_llm_auth(config: dict[str, Any]) -> dict[str, Any]:
     """Initialize the configured client and perform a minimal text-generation check."""
     backend = str(config.get("llm_backend", "anthropic"))
     auth_mode = str(config.get("anthropic_auth_mode", "api_key"))
-    model = str(
-        config.get("eurekaclaw_fast_model")
-        or config.get("openai_compat_model")
-        or config.get("eurekaclaw_model")
-        or ""
-    )
+    codex_auth = str(config.get("codex_auth_mode", "api_key"))
+
+    # Resolve model per backend.
+    if backend == "codex":
+        model = str(config.get("codex_model") or "o4-mini")
+    elif backend == "minimax":
+        model = str(config.get("minimax_model") or "")
+    else:
+        model = str(
+            config.get("eurekaclaw_fast_model")
+            or config.get("openai_compat_model")
+            or config.get("eurekaclaw_model")
+            or ""
+        )
 
     try:
         with _temporary_auth_env(config):
-            client = create_client(
-                backend=backend,
-                anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
-                openai_base_url=str(config.get("openai_compat_base_url", "") or ""),
-                openai_api_key=str(config.get("openai_compat_api_key", "") or ""),
-                openai_model=str(config.get("openai_compat_model", "") or ""),
-            )
+            # For codex OAuth, don't pass openai_api_key — it's injected into
+            # env by maybe_setup_codex_auth() inside _temporary_auth_env.
+            if backend == "codex" and codex_auth == "oauth":
+                client = create_client(
+                    backend=backend,
+                    openai_model=str(config.get("codex_model") or ""),
+                )
+            else:
+                openai_base_url = str(config.get("openai_compat_base_url", "") or "")
+                openai_api_key = str(config.get("openai_compat_api_key", "") or "")
+                openai_model = str(config.get("openai_compat_model", "") or "")
+                if backend == "minimax":
+                    openai_base_url = ""
+                    openai_api_key = str(config.get("minimax_api_key", "") or "")
+                    openai_model = str(config.get("minimax_model", "") or "")
+                effective_backend = "anthropic" if backend == "oauth" else backend
+                client = create_client(
+                    backend=effective_backend,
+                    anthropic_api_key=str(config.get("anthropic_api_key", "") or ""),
+                    openai_base_url=openai_base_url,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                )
             response = await client.messages.create(
                 model=model,
                 max_tokens=16,
@@ -1016,6 +1089,20 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
             runs = [self.state.snapshot_run(run) for run in self.state.list_runs()]
             self._send_json({"runs": runs})
             return
+        _launch_parts = parsed.path.strip("/").split("/")
+        if (len(_launch_parts) == 4 and _launch_parts[0] == "api" and _launch_parts[1] == "runs"
+                and _launch_parts[3] == "launch-html"):
+            _launch_run_id = _launch_parts[2]
+            _launch_run = self.state.get_run(_launch_run_id)
+            if _launch_run is None:
+                self._send_json({"error": "Run not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            _launch_path = _UI_LAUNCH_DIR / f"{_launch_run.run_id}.html"
+            if not _launch_path.is_file():
+                self._send_json({"error": "File not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            self._send_file(_launch_path, as_attachment=False)
+            return
         # Serve artifact files: /api/runs/<run_id>/artifacts/<filename>
         _art_parts = parsed.path.strip("/").split("/")
         if (len(_art_parts) == 5 and _art_parts[0] == "api" and _art_parts[1] == "runs"
@@ -1054,6 +1141,51 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
                 return
             authed, msg = check_ccproxy_auth("claude_api")
             self._send_json({"installed": True, "authenticated": authed, "message": msg})
+            return
+        if parsed.path == "/api/codex/status":
+            try:
+                from eurekaclaw.codex_manager import _read_codex_cli_tokens, _CODEX_CLI_AUTH_PATH
+                from eurekaclaw.auth.token_store import load_tokens
+
+                # Check EurekaClaw store first, then Codex CLI file
+                stored = load_tokens("openai-codex")
+                cli_tokens = _read_codex_cli_tokens()
+                has_token = bool(
+                    (stored and stored.get("access_token"))
+                    or (cli_tokens and cli_tokens.get("access_token"))
+                )
+                if has_token:
+                    self._send_json({
+                        "installed": True,
+                        "authenticated": True,
+                        "message": "Codex credentials available",
+                    })
+                elif _CODEX_CLI_AUTH_PATH.exists():
+                    self._send_json({
+                        "installed": True,
+                        "authenticated": False,
+                        "message": "Codex CLI file found but access token is missing or invalid",
+                    })
+                else:
+                    self._send_json({
+                        "installed": False,
+                        "authenticated": False,
+                        "message": f"No credentials found. Run: npm install -g @openai/codex && codex auth login",
+                    })
+            except Exception as exc:
+                self._send_json({
+                    "installed": False,
+                    "authenticated": False,
+                    "message": f"Error checking Codex status: {exc}",
+                })
+            return
+        if parsed.path == "/api/codex/package-status":
+            try:
+                import importlib.util
+                openai_spec = importlib.util.find_spec("openai")
+                self._send_json({"installed": openai_spec is not None})
+            except Exception:
+                self._send_json({"installed": False})
             return
         if parsed.path == "/api/health":
             self._send_json({"ok": True, "time": datetime.utcnow().isoformat()})
@@ -1233,6 +1365,63 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json({"ok": False, "message": str(exc)})
             return
 
+        if parsed.path == "/api/codex/install":
+            try:
+                repo_root = str(Path(__file__).resolve().parents[2])
+                # Prefer uv pip (uv-managed venvs don't bundle pip)
+                uv_exe = shutil.which("uv")
+                if uv_exe:
+                    cmd = [uv_exe, "pip", "install", "openai"]
+                else:
+                    cmd = [_sys.executable, "-m", "pip", "install", "openai"]
+                result = _subprocess.run(
+                    cmd,
+                    capture_output=True, text=True, timeout=120,
+                    cwd=repo_root,
+                )
+                if result.returncode == 0:
+                    self._send_json({"ok": True, "message": "OpenAI package installed successfully."})
+                else:
+                    self._send_json({"ok": False, "message": result.stderr.strip() or result.stdout.strip()})
+            except Exception as exc:
+                self._send_json({"ok": False, "message": str(exc)})
+            return
+
+        if parsed.path == "/api/codex/login":
+            try:
+                from eurekaclaw.codex_manager import _read_codex_cli_tokens, _CODEX_CLI_AUTH_PATH
+                from eurekaclaw.auth.token_store import save_tokens
+
+                if not _CODEX_CLI_AUTH_PATH.exists():
+                    self._send_json({
+                        "ok": False,
+                        "message": (
+                            f"Codex CLI credentials not found at {_CODEX_CLI_AUTH_PATH}. "
+                            "Install and login first:\n"
+                            "  npm install -g @openai/codex\n"
+                            "  codex auth login"
+                        ),
+                    })
+                    return
+                tokens = _read_codex_cli_tokens()
+                if not tokens or not tokens.get("access_token"):
+                    self._send_json({
+                        "ok": False,
+                        "message": (
+                            f"Could not read a valid access_token from {_CODEX_CLI_AUTH_PATH}. "
+                            "Try re-authenticating with: codex auth login"
+                        ),
+                    })
+                    return
+                save_tokens("openai-codex", tokens)
+                self._send_json({
+                    "ok": True,
+                    "message": f"Codex credentials imported from {_CODEX_CLI_AUTH_PATH}",
+                })
+            except Exception as exc:
+                self._send_json({"ok": False, "message": str(exc)})
+            return
+
         if parsed.path == "/api/skills/install":
             payload = self._read_json()
             skillname = str(payload.get("skillname", "")).strip()
@@ -1327,8 +1516,8 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _send_file(self, file_path: Path) -> None:
-        """Serve a file for download with appropriate Content-Type."""
+    def _send_file(self, file_path: Path, *, as_attachment: bool = True) -> None:
+        """Serve a file with appropriate Content-Type."""
         import mimetypes
         content_type, _ = mimetypes.guess_type(str(file_path))
         if content_type is None:
@@ -1337,7 +1526,8 @@ class UIRequestHandler(SimpleHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Content-Disposition", f'attachment; filename="{file_path.name}"')
+        disposition = "attachment" if as_attachment else "inline"
+        self.send_header("Content-Disposition", f'{disposition}; filename="{file_path.name}"')
         self.end_headers()
         self.wfile.write(data)
 

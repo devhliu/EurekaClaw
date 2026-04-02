@@ -61,13 +61,15 @@ $ eurekaclaw prove "Find recent papers on sparse attention + prove efficiency bo
 
 ## Installation
 
+(See [Installation](https://eurekaclaw.github.io/getting-started/installation.html) for detailed instruction)
+
 **macOS / Linux**
 
 ```bash
 curl -fsSL https://eurekaclaw.ai/install.sh | bash
 ```
 
-**Windows** *(under development — not fully supported yet)*
+**Windows**
 
 ```powershell
 powershell -c "irm https://eurekaclaw.ai/install_win.ps1 | iex"
@@ -75,17 +77,56 @@ powershell -c "irm https://eurekaclaw.ai/install_win.ps1 | iex"
 
 The macOS/Linux installer clones the repo, creates a virtual environment, installs EurekaClaw, and adds the `eurekaclaw` command to your PATH. Run `eurekaclaw onboard` afterwards to configure your API key and settings.
 
-> **Windows users:** native Windows support is under active development. In the meantime, use [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install) (Ubuntu) and follow the macOS/Linux instructions inside the WSL terminal.
+<details>
+<summary>Manual install with uv (recommended — Linux / macOS)</summary>
+
+**Requirements:** Python ≥ 3.11, Node.js ≥ 18, Git, [uv](https://docs.astral.sh/uv/)
+
+```bash
+# 1. Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Clone the repository
+git clone https://github.com/EurekaClaw/EurekaClaw
+cd EurekaClaw
+
+# 3. Create a virtual environment with Python 3.11 and activate it
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+
+# 4. Install Python dependencies + frontend
+uv pip install -e "."
+cd frontend && npm install && cd ..
+
+# 5. Post-install setup
+eurekaclaw install-skills     # install built-in proof skills
+eurekaclaw onboard            # configure API key and settings
+```
+</details>
 
 <details>
-<summary>Manual install (all platforms)</summary>
+<summary>Manual install with pip (Linux / macOS)</summary>
 
-**Requirements:** Python ≥ 3.11, Node.js ≥ 20, Git
+**Requirements:** Python ≥ 3.11, Node.js ≥ 18, Git
 
 ```bash
 git clone https://github.com/EurekaClaw/EurekaClaw
 cd EurekaClaw
+python3 -m venv .venv
+source .venv/bin/activate
 make install                  # pip install -e "." + npm install (frontend)
+```
+</details>
+
+<details>
+<summary>Manual install (Windows)</summary>
+
+**Requirements:** Python ≥ 3.11, Node.js ≥ 18, Git
+
+```bash
+git clone https://github.com/EurekaClaw/EurekaClaw
+cd EurekaClaw
+powershell -ExecutionPolicy Bypass -File install_win.ps1
 ```
 </details>
 
@@ -111,6 +152,9 @@ eurekaclaw explore "multi-armed bandit theory"
 
 # CLI — start from arXiv papers
 eurekaclaw from-papers 1706.03762 2005.14165 --domain "attention mechanisms"
+
+# Browser UI - recommended
+eurekaclaw ui --open-browser
 ```
 
 > No API key? Use a Claude Pro/Max subscription via [OAuth](https://eurekaclaw.github.io/getting-started/authentication.html#option-b-claude-pro-max-via-oauth).
@@ -232,6 +276,11 @@ EurekaClaw builds on ideas and inspiration from the broader AI-for-science commu
 - [ScienceClaw](https://github.com/beita6969/ScienceClaw) — science-focused research agent
 
 ---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EurekaClaw/EurekaClaw&type=Date)](https://www.star-history.com/#EurekaClaw/EurekaClaw&Date)
+
 
 ## Citation
 

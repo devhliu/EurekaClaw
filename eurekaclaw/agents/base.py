@@ -270,6 +270,8 @@ class BaseAgent(ABC):
                 for m in msgs
                 if m["role"] == "assistant" and isinstance(m["content"], str)
             ]
+            if not summaries:
+                return "No intermediate findings recorded yet. Continue working on the task."
             return "Previous findings: " + " | ".join(summaries[-3:])
 
     async def _call_model(
