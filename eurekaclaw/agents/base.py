@@ -6,9 +6,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator
 
-from tenacity import stop_after_attempt, wait_exponential, Retrying
-from tenacity.asyncio import AsyncRetrying
-
 from eurekaclaw.agents.session import AgentSession
 from eurekaclaw.knowledge_bus.bus import KnowledgeBus
 from eurekaclaw.llm import LLMClient, create_client
@@ -284,31 +281,28 @@ class BaseAgent(ABC):
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
     ) -> NormalizedMessage:
+        """Call the LLM.  Retry logic is handled inside LLMClient.messages.create()
+        (see ``_MessagesNamespace.create`` in ``llm/base.py``), which already
+        applies exponential backoff only for retryable errors (429, 500, 502, etc.)
+        and raises immediately for fatal ones (auth, invalid model, 400).
+        No outer retry wrapper is needed — adding one would cause non-retryable
+        errors to be retried needlessly."""
         from eurekaclaw.config import settings
         _max_tokens = max_tokens if max_tokens is not None else settings.max_tokens_agent
-        async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(settings.llm_retry_attempts),
-            wait=wait_exponential(
-                min=settings.llm_retry_wait_min,
-                max=settings.llm_retry_wait_max,
-            ),
-            reraise=True,
-        ):
-            with attempt:
-                try:
-                    return await self.client.messages.create(
-                        model=settings.active_model,
-                        max_tokens=_max_tokens,
-                        system=system,
-                        messages=messages,
-                        tools=tools or None,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "LLM call failed (model=%s): %s: %s",
-                        settings.active_model, type(e).__name__, e,
-                    )
-                    raise
+        try:
+            return await self.client.messages.create(
+                model=settings.active_model,
+                max_tokens=_max_tokens,
+                system=system,
+                messages=messages,
+                tools=tools or None,
+            )
+        except Exception as e:
+            logger.error(
+                "LLM call failed (model=%s): %s: %s",
+                settings.active_model, type(e).__name__, e,
+            )
+            raise
 
     def _make_result(
         self,
