@@ -78,6 +78,129 @@ powershell -c "irm https://eurekaclaw.ai/install_win.ps1 | iex"
 macOS/Linux 安装程序会克隆仓库、创建虚拟环境、安装 EurekaClaw，并将 `eurekaclaw` 命令添加到 PATH。之后运行 `eurekaclaw onboard` 以配置 API 密钥和设置。
 
 <details>
+<summary>Docker — 一行命令安装（推荐服务器用户 — 无需 sudo）</summary>
+
+**要求：** 仅需 Docker（用户在 `docker` 组中即可，无需 sudo、无需安装 Python、无需安装 Node.js）
+
+**Docker Hub 预构建镜像：**
+
+| 镜像 | 标签 | 大小 | 描述 |
+|---|---|---|---|
+| `eurekaclaw/eurekaclaw` | `latest` | ~10 GB | CPU — 内含 Python 3.11、Node.js 18、所有依赖 |
+| `eurekaclaw/eurekaclaw` | `gpu` | ~13 GB | GPU — NVIDIA CUDA 12.4 + 以上所有内容 |
+
+```bash
+# 拉取镜像（一次性，约 10 GB）
+docker pull eurekaclaw/eurekaclaw
+```
+
+**一行命令 — 启动浏览器 UI：**
+```bash
+docker run --rm -it -p 8080:8080 -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw
+# 浏览器打开 http://localhost:8080
+```
+
+**GPU 支持（NVIDIA）：**
+```bash
+docker run --rm -it -p 8080:8080 --gpus all \
+  -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw:gpu
+```
+
+**使用 `.env` 配置文件 + 数据持久化：**
+```bash
+# 先复制并编辑 .env: cp .env.example .env
+docker run --rm -it -p 8080:8080 --env-file .env \
+  -v ~/.eurekaclaw:/root/.eurekaclaw eurekaclaw/eurekaclaw
+```
+
+**CLI 模式（prove / explore / from-papers）：**
+```bash
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw prove "The sample complexity of transformers is O(L·d·log(d)/ε²)"
+
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw explore "multi-armed bandit theory"
+```
+
+**交互式终端（容器内有完整环境）：**
+```bash
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw bash
+# 容器内：eurekaclaw、python3、node、npm、uv 全部可用
+```
+
+**远程服务器访问（SSH）：**
+
+使用 `--network host` 让容器直接共享宿主机网络 — 无需 `-p` 端口映射，OAuth 回调也直接可用：
+
+```bash
+# 第一步：SSH 连接服务器并转发端口
+ssh -L 8080:localhost:8080 user@server-ip
+
+# 第二步：在服务器上用 host 网络模式启动容器
+docker run --rm -it --network host \
+  -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw
+
+# 第三步：在笔记本浏览器打开 http://localhost:8080
+```
+
+> **说明：** 服务器上无需 root/sudo 权限 — 只要有 Docker 权限即可。容器内部以 root 运行，因此在容器内安装软件包或写入文件不会有权限问题。
+
+**认证方式：API Key vs OAuth（Claude Pro/Max）**
+
+*方式 A — API Key（最简单）：*
+```bash
+docker run --rm -it --network host \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw
+```
+
+*方式 B — OAuth 登录 Claude Pro/Max（无需 API Key）：*
+
+```bash
+# 第一步：SSH 连接时转发 UI 端口 + OAuth 回调端口（从笔记本执行）
+ssh -L 8080:localhost:8080 -L 54545:localhost:54545 user@server-ip
+
+# 第二步：用 host 网络模式启动容器 + 持久化凭证
+docker run --rm -it --network host \
+  -v ~/.config/ccproxy:/root/.config/ccproxy \
+  -v ~/.eurekaclaw:/root/.eurekaclaw \
+  eurekaclaw/eurekaclaw bash
+
+# 第三步：在容器内执行 OAuth 登录（仅首次需要）
+ccproxy auth login claude_api
+# 复制打印的 URL → 粘贴到笔记本浏览器 → 完成授权
+
+# 第四步：启动 EurekaClaw
+ANTHROPIC_AUTH_MODE=oauth eurekaclaw ui --host 0.0.0.0 --port 8080
+
+# 后续运行 — 凭证已保存，无需重新登录：
+docker run --rm -it --network host \
+  -e ANTHROPIC_AUTH_MODE=oauth \
+  -v ~/.config/ccproxy:/root/.config/ccproxy \
+  -v ~/.eurekaclaw:/root/.eurekaclaw \
+  eurekaclaw/eurekaclaw
+```
+
+**本地构建（可选）：**
+```bash
+git clone https://github.com/EurekaClaw/EurekaClaw && cd EurekaClaw
+make docker            # CPU 镜像
+make docker-gpu        # GPU 镜像（NVIDIA CUDA 12.4）
+make docker-run        # 运行 UI: http://localhost:8080
+```
+
+**Docker Compose：**
+```bash
+cp .env.example .env   # 编辑并填入 API key
+docker compose up                    # CPU — UI 在 http://localhost:8080
+docker compose --profile gpu up      # GPU（NVIDIA）
+docker compose --profile dev up      # 开发模式（热更新 :5173 + :7860）
+```
+
+完整配置参见 [docker-compose.yml](docker-compose.yml)。
+</details>
+
+<details>
 <summary>使用 uv 手动安装（推荐 — Linux / macOS）</summary>
 
 **要求：** Python ≥ 3.11，Node.js ≥ 18，Git，[uv](https://docs.astral.sh/uv/)

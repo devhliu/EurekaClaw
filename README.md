@@ -78,6 +78,129 @@ powershell -c "irm https://eurekaclaw.ai/install_win.ps1 | iex"
 The macOS/Linux installer clones the repo, creates a virtual environment, installs EurekaClaw, and adds the `eurekaclaw` command to your PATH. Run `eurekaclaw onboard` afterwards to configure your API key and settings.
 
 <details>
+<summary>Docker — one-line install (recommended for servers — no sudo required)</summary>
+
+**Requirements:** Docker only (user must be in the `docker` group — no sudo, no Python, no Node.js needed on the host)
+
+**Pre-built images on Docker Hub:**
+
+| Image | Tag | Size | Description |
+|---|---|---|---|
+| `eurekaclaw/eurekaclaw` | `latest` | ~10 GB | CPU — Python 3.11, Node.js 18, all dependencies pre-installed |
+| `eurekaclaw/eurekaclaw` | `gpu` | ~13 GB | GPU — NVIDIA CUDA 12.4 + everything above |
+
+```bash
+# Pull the image (one-time, ~10 GB)
+docker pull eurekaclaw/eurekaclaw
+```
+
+**One-line install — launch the browser UI:**
+```bash
+docker run --rm -it -p 8080:8080 -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw
+# Open http://localhost:8080 in your browser
+```
+
+**GPU support (NVIDIA):**
+```bash
+docker run --rm -it -p 8080:8080 --gpus all \
+  -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw:gpu
+```
+
+**With `.env` config file + persistent data:**
+```bash
+# Copy and edit .env first: cp .env.example .env
+docker run --rm -it -p 8080:8080 --env-file .env \
+  -v ~/.eurekaclaw:/root/.eurekaclaw eurekaclaw/eurekaclaw
+```
+
+**CLI mode (prove / explore / from-papers):**
+```bash
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw prove "The sample complexity of transformers is O(L·d·log(d)/ε²)"
+
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw explore "multi-armed bandit theory"
+```
+
+**Interactive shell (full environment inside container):**
+```bash
+docker run --rm -it -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw bash
+# Inside: eurekaclaw, python3, node, npm, uv are all available
+```
+
+**Remote server access (SSH):**
+
+Use `--network host` so the container shares the server's network directly — no `-p` port mapping needed, and OAuth callbacks just work:
+
+```bash
+# Step 1: SSH into server with port forwarding
+ssh -L 8080:localhost:8080 user@server-ip
+
+# Step 2: On the server, run the container with host networking
+docker run --rm -it --network host \
+  -e ANTHROPIC_API_KEY=sk-ant-... eurekaclaw/eurekaclaw
+
+# Step 3: Open http://localhost:8080 in your laptop's browser
+```
+
+> **Note:** No root/sudo required on the server — just Docker access. The container runs as root internally, so there are no permission issues for installing packages or writing files inside the container.
+
+**Authentication: API Key vs OAuth (Claude Pro/Max)**
+
+*Option A — API Key (simplest):*
+```bash
+docker run --rm -it --network host \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  eurekaclaw/eurekaclaw
+```
+
+*Option B — OAuth for Claude Pro/Max (no API key needed):*
+
+```bash
+# Step 1: SSH into server (forward UI port + OAuth callback port)
+ssh -L 8080:localhost:8080 -L 54545:localhost:54545 user@server-ip
+
+# Step 2: Start container with host networking + persistent credentials
+docker run --rm -it --network host \
+  -v ~/.config/ccproxy:/root/.config/ccproxy \
+  -v ~/.eurekaclaw:/root/.eurekaclaw \
+  eurekaclaw/eurekaclaw bash
+
+# Step 3: Inside the container, run OAuth login (one-time)
+ccproxy auth login claude_api
+# Copy the URL → paste into your laptop's browser → authorize
+
+# Step 4: Start EurekaClaw
+ANTHROPIC_AUTH_MODE=oauth eurekaclaw ui --host 0.0.0.0 --port 8080
+
+# Subsequent runs — credentials are saved, no re-login needed:
+docker run --rm -it --network host \
+  -e ANTHROPIC_AUTH_MODE=oauth \
+  -v ~/.config/ccproxy:/root/.config/ccproxy \
+  -v ~/.eurekaclaw:/root/.eurekaclaw \
+  eurekaclaw/eurekaclaw
+```
+
+**Build locally (optional):**
+```bash
+git clone https://github.com/EurekaClaw/EurekaClaw && cd EurekaClaw
+make docker            # CPU image
+make docker-gpu        # GPU image (NVIDIA CUDA 12.4)
+make docker-run        # run UI at http://localhost:8080
+```
+
+**Docker Compose:**
+```bash
+cp .env.example .env   # edit with your API key
+docker compose up                    # CPU — UI at http://localhost:8080
+docker compose --profile gpu up      # GPU (NVIDIA)
+docker compose --profile dev up      # Development (hot-reload on :5173 + :7860)
+```
+
+See [docker-compose.yml](docker-compose.yml) for full configuration.
+</details>
+
+<details>
 <summary>Manual install with uv (recommended — Linux / macOS)</summary>
 
 **Requirements:** Python ≥ 3.11, Node.js ≥ 18, Git, [uv](https://docs.astral.sh/uv/)
